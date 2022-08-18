@@ -1,12 +1,13 @@
 use arrow::{
     self,
-    array::{StringArray, ArrayRef, Float64Array, Int32Array, TimestampSecondArray},
-    record_batch::RecordBatch,
+    array::{ArrayRef, Float64Array, Int32Array, StringArray, TimestampSecondArray},
     datatypes::{DataType, Field, Schema, TimeUnit},
+    record_batch::RecordBatch,
 };
 use chrono::{DateTime, Utc};
-use std::{sync::Arc, iter::Map};
+use fallible_iterator::FallibleIterator;
 use rusqlite::{self, Connection};
+use std::{iter::Iterator, sync::Arc};
 
 fn get_data_type(sql_name: Option<&str>) -> DataType {
     sql_name
@@ -34,64 +35,76 @@ fn get_schema(connection: &Connection, table_name: &str) -> rusqlite::Result<Sch
     Ok(Schema::new(fields))
 }
 
+fn get_columns(schema: &Schema, connection: &Connection) -> Vec<Arc<(dyn arrow::array::Array)>> {
+    let names_and_types = schema
+        .fields()
+        .iter()
+        .map(|field| (field.name(), field.data_type()));
+
+    names_and_types
+        .map(|(field_name, field_type)| {
+            let sql = format!("SELECT {} FROM gpkg_contents", field_name);
+            let mut statement = connection
+                .prepare(&sql)
+                .expect("Failed to prepare statment.");
+            let rows = statement.query([]).expect("Failed to execute query.");
+            let array_ref = match field_type {
+                DataType::Utf8 => {
+                    let values: rusqlite::Result<Vec<String>> = rows
+                        .map(|row| {
+                            let value: rusqlite::Result<String> = row.get(0);
+                            value
+                        })
+                        .collect();
+                    let data = StringArray::from_iter_values(values.unwrap());
+                    Arc::new(data) as ArrayRef
+                }
+                DataType::Float64 => {
+                    let values: rusqlite::Result<Vec<f64>> = rows
+                        .map(|row| {
+                            let value: rusqlite::Result<f64> = row.get(0);
+                            value
+                        })
+                        .collect();
+                    let data = Float64Array::from_iter_values(values.unwrap());
+                    Arc::new(data) as ArrayRef
+                }
+                DataType::Int32 => {
+                    let values: rusqlite::Result<Vec<i32>> = rows
+                        .map(|row| {
+                            let value: rusqlite::Result<i32> = row.get(0);
+                            value
+                        })
+                        .collect();
+                    let data = Int32Array::from_iter_values(values.unwrap());
+                    Arc::new(data) as ArrayRef
+                }
+                DataType::Timestamp(TimeUnit::Second, None) => {
+                    let values: rusqlite::Result<Vec<i64>> = rows
+                        .map(|row| {
+                            let value: DateTime<Utc> = row.get(0)?;
+                            Ok(value.timestamp())
+                        })
+                        .collect();
+                    let data = TimestampSecondArray::from_iter_values(values.unwrap());
+                    Arc::new(data) as ArrayRef
+                }
+                _ => unimplemented!(),
+            };
+            array_ref
+        })
+        .collect()
+}
+
 fn main() -> rusqlite::Result<()> {
     let path = "Data/bdline_gb.gpkg";
     let connection = Connection::open(path)?;
 
     let schema = get_schema(&connection, "gpkg_contents")?;
 
-    let names_and_types: Map<Iter<Field>>, Closure> = schema
-        .fields()
-        .iter()
-        .map(|field| (field.name(), field.data_type()));
+    let columns = get_columns(&schema, &connection);
 
-    let arrays: Vec<Arc<(dyn arrow::array::Array + 'static)>> = names_and_types
-        .into_iter()
-        .map(|(field_name, field_type)| {
-            let sql = format!("SELECT {} FROM gpkg_contents", field_name);
-            let mut statement = connection.prepare(&sql).unwrap();
-            let mut rows = statement.query([]).unwrap();
-            let array_ref = match field_type {
-                DataType::Utf8 => {
-                    let mut values: Vec<String> = Vec::new();
-                    while let Some(row) = rows.next().unwrap() {
-                        values.push(row.get(0).unwrap())
-                    }
-                    let data = StringArray::from_iter_values(values);
-                    Arc::new(data) as ArrayRef
-                }
-                DataType::Float64 => {
-                    let mut values: Vec<f64> = Vec::new();
-                    while let Some(row) = rows.next().unwrap() {
-                        values.push(row.get(0).unwrap())
-                    }
-                    let data = Float64Array::from_iter_values(values);
-                    Arc::new(data) as ArrayRef
-                }
-                DataType::Int32 => {
-                    let mut values: Vec<i32> = Vec::new();
-                    while let Some(row) = rows.next().unwrap() {
-                        values.push(row.get(0).unwrap())
-                    }
-                    let data = Int32Array::from_iter_values(values);
-                    Arc::new(data) as ArrayRef
-                }
-                DataType::Timestamp(TimeUnit::Second, None) => {
-                    let mut values: Vec<i64> = Vec::new();
-                    while let Some(row) = rows.next().unwrap() {
-                        let date_time: DateTime<Utc> = row.get(0).unwrap();
-                        values.push(date_time.timestamp())
-                    }
-                    let data = TimestampSecondArray::from_iter_values(values);
-                    Arc::new(data) as ArrayRef
-                }
-                _ => todo!(),
-            };
-            array_ref
-        })
-        .collect();
-
-    let batch = RecordBatch::try_new(Arc::new(schema), arrays).unwrap();
+    let batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
 
     dbg!(batch);
 
