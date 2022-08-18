@@ -1,17 +1,18 @@
 use arrow::{
     self,
-    array::{ArrayRef, Float64Array, Int32Array, StringArray, TimestampSecondArray},
-    datatypes::{DataType, Field, Schema, TimeUnit},
+    array::{ArrayRef, Float64Array, Int32Array, StringArray, TimestampSecondArray, BooleanArray, PrimitiveArray},
+    datatypes::{DataType, Field, Schema, TimeUnit, Int8Type},
     record_batch::RecordBatch,
 };
 use chrono::{DateTime, Utc};
 use fallible_iterator::FallibleIterator;
-use rusqlite::{self, Connection};
+use rusqlite::{self, Connection, named_params};
 use std::{iter::Iterator, sync::Arc};
 
 fn get_data_type(sql_name: Option<&str>) -> DataType {
     sql_name
         .map(|name| match name {
+            "BOOLEAN" => DataType::Boolean,
             "TEXT" => DataType::Utf8,
             "DATETIME" => DataType::Timestamp(TimeUnit::Second, None),
             "DOUBLE" => DataType::Float64,
@@ -21,8 +22,8 @@ fn get_data_type(sql_name: Option<&str>) -> DataType {
         .unwrap()
 }
 
-fn get_schema(connection: &Connection, table_name: &str) -> rusqlite::Result<Schema> {
-    let sql = format!("SELECT * FROM {}", table_name);
+fn get_schema(connection: &Connection, layer: &str) -> rusqlite::Result<Schema> {
+    let sql = format!("SELECT * FROM {}", layer);
     let statement = connection.prepare(&sql)?;
 
     let columns = statement.columns();
@@ -35,7 +36,7 @@ fn get_schema(connection: &Connection, table_name: &str) -> rusqlite::Result<Sch
     Ok(Schema::new(fields))
 }
 
-fn get_columns(schema: &Schema, connection: &Connection) -> Vec<Arc<(dyn arrow::array::Array)>> {
+fn get_columns(connection: &Connection, schema: &Schema, layer: &str) -> Vec<Arc<(dyn arrow::array::Array)>> {
     let names_and_types = schema
         .fields()
         .iter()
@@ -43,12 +44,35 @@ fn get_columns(schema: &Schema, connection: &Connection) -> Vec<Arc<(dyn arrow::
 
     names_and_types
         .map(|(field_name, field_type)| {
-            let sql = format!("SELECT {} FROM gpkg_contents", field_name);
             let mut statement = connection
-                .prepare(&sql)
+                .prepare("SELECT :field_name FROM :layer")
                 .expect("Failed to prepare statment.");
-            let rows = statement.query([]).expect("Failed to execute query.");
+            let named_parameters = named_params! {
+                ":field_name": field_name,
+                ":layer": layer,
+            };
+            let rows = statement.query(named_parameters).expect("Failed to execute query.");
             let array_ref = match field_type {
+                DataType::Boolean => {
+                    let values: rusqlite::Result<Vec<Option<bool>>> = rows
+                        .map(|row| {
+                            let value = row.get(0).ok();
+                            Ok(value)
+                        })
+                        .collect();
+                    let data = BooleanArray::from_iter(values.unwrap());
+                    Arc::new(data) as ArrayRef
+                }
+                DataType::Int8 => {
+                    let values: rusqlite::Result<Vec<Option<i8>>> = rows
+                        .map(|row| {
+                            let value = row.get(0).ok();
+                            Ok(value)
+                        })
+                        .collect();
+                    let data: PrimitiveArray<Int8Type> = PrimitiveArray::from_iter(values.unwrap());
+                    Arc::new(data) as ArrayRef
+                }
                 DataType::Utf8 => {
                     let values: rusqlite::Result<Vec<String>> = rows
                         .map(|row| {
@@ -96,17 +120,54 @@ fn get_columns(schema: &Schema, connection: &Connection) -> Vec<Arc<(dyn arrow::
         .collect()
 }
 
+
+fn list_layers(connection: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut statement = connection.prepare("SELECT table_name FROM gpkg_contents")?;
+
+    let rows = statement.query([])?;
+
+    let values: rusqlite::Result<Vec<String>> = rows
+        .map(|row| {
+            let value: rusqlite::Result<String> = row.get(0);
+            value
+        })
+        .collect();
+
+    values
+}
+
+fn get_bounds(connection: &Connection, layer: &str) -> rusqlite::Result<[f64; 4]> {
+    let mut statement = connection
+        .prepare("SELECT min_x, min_y, max_x, max_y FROM gpkg_contents WHERE table_name = :layer")
+        .expect("Failed to prepare statment.");
+    let named_parameters = named_params! {
+        ":layer": layer,
+    };
+    let row = statement.query_row(named_parameters, |row| {
+        let values: [f64; 4] = [0, 1, 2, 3].map(|index: usize| {
+            row.get_unwrap(index)
+        });
+        Ok(values)
+    });
+
+    row
+} 
+
 fn main() -> rusqlite::Result<()> {
     let path = "Data/bdline_gb.gpkg";
     let connection = Connection::open(path)?;
 
-    let schema = get_schema(&connection, "gpkg_contents")?;
+    let _layers = list_layers(&connection)?;
 
-    let columns = get_columns(&schema, &connection);
+    let bounds = get_bounds(&connection, "english_region")?;
 
-    let batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
+    // let schema = get_schema(&connection, "english_region")?;
 
-    dbg!(batch);
+    // let columns = get_columns(&connection, &schema, "english_region");
+
+    // let _batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
+
+    dbg!(bounds);
 
     Ok(())
 }
