@@ -132,12 +132,10 @@ fn get_bounds(connection: &Connection, layer: &str) -> rusqlite::Result<[f64; 4]
     let named_parameters = named_params! {
         ":layer": layer,
     };
-    let row = statement.query_row(named_parameters, |row| {
+    statement.query_row(named_parameters, |row| {
         let values: [f64; 4] = [0, 1, 2, 3].map(|index: usize| row.get_unwrap(index));
         Ok(values)
-    });
-
-    row
+    })
 }
 
 fn main() -> rusqlite::Result<()> {
