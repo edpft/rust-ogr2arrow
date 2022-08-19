@@ -1,22 +1,30 @@
 use arrow::{
     self,
-    array::{ArrayRef, Float64Array, Int32Array, StringArray, TimestampSecondArray, BooleanArray, PrimitiveArray},
-    datatypes::{DataType, Field, Schema, TimeUnit, Int8Type},
+    array::{ArrayRef, Float64Array, Int32Array, StringArray, TimestampSecondArray, BooleanArray, Int8Array, Int16Array, Int64Array, Float32Array},
+    datatypes::{DataType, Field, Schema, TimeUnit},
     record_batch::RecordBatch,
 };
 use chrono::{DateTime, Utc};
 use fallible_iterator::FallibleIterator;
-use rusqlite::{self, Connection, named_params};
+use rusqlite::{self, Connection, named_params, NO_PARAMS};
 use std::{iter::Iterator, sync::Arc};
 
 fn get_data_type(sql_name: Option<&str>) -> DataType {
     sql_name
         .map(|name| match name {
             "BOOLEAN" => DataType::Boolean,
-            "TEXT" => DataType::Utf8,
-            "DATETIME" => DataType::Timestamp(TimeUnit::Second, None),
+            "TINYINT" => DataType::Int8,
+            "SMALLINT" => DataType::Int16,
+            "MEDIUMINT" => DataType::Int32,
+            "INT" => DataType::Int64,
+            "INTEGER" => DataType::Int64,
+            "FLOAT" => DataType::Float32,
             "DOUBLE" => DataType::Float64,
-            "INTEGER" => DataType::Int32,
+            "REAL" => DataType::Float64,
+            "TEXT" => DataType::Utf8,
+            "BLOB" => DataType::Binary,
+            "DATE" => DataType::Date32,
+            "DATETIME" => DataType::Timestamp(TimeUnit::Second, None),
             &_ => todo!(),
         })
         .unwrap()
@@ -36,6 +44,21 @@ fn get_schema(connection: &Connection, layer: &str) -> rusqlite::Result<Schema> 
     Ok(Schema::new(fields))
 }
 
+macro_rules! generate_match_arm {
+    ($rows:ident, $rust_type:ty, $array_type:ty) => {
+        {
+            let values: rusqlite::Result<Vec<Option<$rust_type>>> = $rows
+                .map(|row| {
+                    let value = row.get(0).ok();
+                    Ok(value)
+                })
+                .collect();
+            let data = <$array_type>::from_iter(values.unwrap());
+            Arc::new(data) as ArrayRef
+        }
+    };
+}
+
 fn get_columns(connection: &Connection, schema: &Schema, layer: &str) -> Vec<Arc<(dyn arrow::array::Array)>> {
     let names_and_types = schema
         .fields()
@@ -44,65 +67,27 @@ fn get_columns(connection: &Connection, schema: &Schema, layer: &str) -> Vec<Arc
 
     names_and_types
         .map(|(field_name, field_type)| {
+            let sql = format!("SELECT {} FROM {}", field_name, layer);
             let mut statement = connection
-                .prepare("SELECT :field_name FROM :layer")
+                .prepare(&sql)
                 .expect("Failed to prepare statment.");
-            let named_parameters = named_params! {
-                ":field_name": field_name,
-                ":layer": layer,
-            };
-            let rows = statement.query(named_parameters).expect("Failed to execute query.");
+            let rows = statement.query([]).expect("Failed to execute query.");
+            // let mut statement = connection
+            //     .prepare("SELECT :field_name FROM :layer")
+            //     .expect("Failed to prepare statment.");
+            // let rows = statement.query(named_params! {
+            //     ":field_name": field_name,
+            //     ":layer": layer,
+            // }).expect("Failed to execute query.");
             let array_ref = match field_type {
-                DataType::Boolean => {
-                    let values: rusqlite::Result<Vec<Option<bool>>> = rows
-                        .map(|row| {
-                            let value = row.get(0).ok();
-                            Ok(value)
-                        })
-                        .collect();
-                    let data = BooleanArray::from_iter(values.unwrap());
-                    Arc::new(data) as ArrayRef
-                }
-                DataType::Int8 => {
-                    let values: rusqlite::Result<Vec<Option<i8>>> = rows
-                        .map(|row| {
-                            let value = row.get(0).ok();
-                            Ok(value)
-                        })
-                        .collect();
-                    let data: PrimitiveArray<Int8Type> = PrimitiveArray::from_iter(values.unwrap());
-                    Arc::new(data) as ArrayRef
-                }
-                DataType::Utf8 => {
-                    let values: rusqlite::Result<Vec<String>> = rows
-                        .map(|row| {
-                            let value: rusqlite::Result<String> = row.get(0);
-                            value
-                        })
-                        .collect();
-                    let data = StringArray::from_iter_values(values.unwrap());
-                    Arc::new(data) as ArrayRef
-                }
-                DataType::Float64 => {
-                    let values: rusqlite::Result<Vec<f64>> = rows
-                        .map(|row| {
-                            let value: rusqlite::Result<f64> = row.get(0);
-                            value
-                        })
-                        .collect();
-                    let data = Float64Array::from_iter_values(values.unwrap());
-                    Arc::new(data) as ArrayRef
-                }
-                DataType::Int32 => {
-                    let values: rusqlite::Result<Vec<i32>> = rows
-                        .map(|row| {
-                            let value: rusqlite::Result<i32> = row.get(0);
-                            value
-                        })
-                        .collect();
-                    let data = Int32Array::from_iter_values(values.unwrap());
-                    Arc::new(data) as ArrayRef
-                }
+                DataType::Boolean => generate_match_arm!(rows, bool, BooleanArray),
+                DataType::Int8 => generate_match_arm!(rows, i8, Int8Array),
+                DataType::Int16 => generate_match_arm!(rows, i16, Int16Array),
+                DataType::Int32 => generate_match_arm!(rows, i32, Int32Array),
+                DataType::Int64 => generate_match_arm!(rows, i64, Int64Array),
+                DataType::Float32 => generate_match_arm!(rows, f32, Float32Array),
+                DataType::Float64 => generate_match_arm!(rows, f64, Float64Array),
+                DataType::Utf8 => generate_match_arm!(rows, String, StringArray),
                 DataType::Timestamp(TimeUnit::Second, None) => {
                     let values: rusqlite::Result<Vec<i64>> = rows
                         .map(|row| {
@@ -157,17 +142,17 @@ fn main() -> rusqlite::Result<()> {
     let path = "Data/bdline_gb.gpkg";
     let connection = Connection::open(path)?;
 
-    let _layers = list_layers(&connection)?;
+    // let _layers = list_layers(&connection)?;
 
-    let bounds = get_bounds(&connection, "english_region")?;
+    // let _bounds = get_bounds(&connection, "english_region")?;
 
-    // let schema = get_schema(&connection, "english_region")?;
+    let schema = get_schema(&connection, "gpkg_contents")?;
 
-    // let columns = get_columns(&connection, &schema, "english_region");
+    let columns = get_columns(&connection, &schema, "gpkg_contents");
 
-    // let _batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
+    let batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
 
-    dbg!(bounds);
+    dbg!(batch);
 
     Ok(())
 }
