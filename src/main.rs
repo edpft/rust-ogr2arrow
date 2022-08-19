@@ -1,12 +1,15 @@
 use arrow::{
     self,
-    array::{ArrayRef, Float64Array, Int32Array, StringArray, TimestampSecondArray, BooleanArray, Int8Array, Int16Array, Int64Array, Float32Array},
+    array::{
+        ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, StringArray, TimestampSecondArray,
+    },
     datatypes::{DataType, Field, Schema, TimeUnit},
     record_batch::RecordBatch,
 };
 use chrono::{DateTime, Utc};
 use fallible_iterator::FallibleIterator;
-use rusqlite::{self, Connection, named_params, NO_PARAMS};
+use rusqlite::{self, named_params, Connection};
 use std::{iter::Iterator, sync::Arc};
 
 fn get_data_type(sql_name: Option<&str>) -> DataType {
@@ -45,21 +48,23 @@ fn get_schema(connection: &Connection, layer: &str) -> rusqlite::Result<Schema> 
 }
 
 macro_rules! generate_match_arm {
-    ($rows:ident, $rust_type:ty, $array_type:ty) => {
-        {
-            let values: rusqlite::Result<Vec<Option<$rust_type>>> = $rows
-                .map(|row| {
-                    let value = row.get(0).ok();
-                    Ok(value)
-                })
-                .collect();
-            let data = <$array_type>::from_iter(values.unwrap());
-            Arc::new(data) as ArrayRef
-        }
-    };
+    ($rows:ident, $rust_type:ty, $array_type:ty) => {{
+        let values: rusqlite::Result<Vec<Option<$rust_type>>> = $rows
+            .map(|row| {
+                let value = row.get(0).ok();
+                Ok(value)
+            })
+            .collect();
+        let data = <$array_type>::from_iter(values.unwrap());
+        Arc::new(data) as ArrayRef
+    }};
 }
 
-fn get_columns(connection: &Connection, schema: &Schema, layer: &str) -> Vec<Arc<(dyn arrow::array::Array)>> {
+fn get_columns(
+    connection: &Connection,
+    schema: &Schema,
+    layer: &str,
+) -> Vec<Arc<(dyn arrow::array::Array)>> {
     let names_and_types = schema
         .fields()
         .iter()
@@ -105,7 +110,6 @@ fn get_columns(connection: &Connection, schema: &Schema, layer: &str) -> Vec<Arc
         .collect()
 }
 
-
 fn list_layers(connection: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut statement = connection.prepare("SELECT table_name FROM gpkg_contents")?;
 
@@ -129,14 +133,12 @@ fn get_bounds(connection: &Connection, layer: &str) -> rusqlite::Result<[f64; 4]
         ":layer": layer,
     };
     let row = statement.query_row(named_parameters, |row| {
-        let values: [f64; 4] = [0, 1, 2, 3].map(|index: usize| {
-            row.get_unwrap(index)
-        });
+        let values: [f64; 4] = [0, 1, 2, 3].map(|index: usize| row.get_unwrap(index));
         Ok(values)
     });
 
     row
-} 
+}
 
 fn main() -> rusqlite::Result<()> {
     let path = "Data/bdline_gb.gpkg";
