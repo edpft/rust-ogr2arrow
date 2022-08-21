@@ -1,27 +1,20 @@
 use arrow::array::ArrayData;
-use arrow::array::ArrayRef;
 use arrow::array::FixedSizeListArray;
-use arrow::array::FixedSizeListBuilder;
-use arrow::array::GenericListArray;
-use arrow::array::GenericListBuilder;
-use arrow::array::ListArray;
-use arrow::array::StructArray;
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::FixedSizeList;
 use arrow::datatypes::Field;
-use binread::{io::Cursor, BinRead};
+use binread::BinRead;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 
-#[derive(BinRead, Debug, PartialEq)]
+#[derive(BinRead, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[br(repr = u8)]
-enum WkbByteOrder {
+pub enum WkbByteOrder {
     Xdr = 0,
     Ndr = 1,
 }
 
-#[derive(Debug, PartialEq, BinRead)]
+#[derive(BinRead, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[br(repr = u32)]
 pub enum WkbGeometryType {
     Point = 1,
@@ -39,8 +32,8 @@ pub enum WkbGeometryType {
 #[derive(Debug, PartialEq, BinRead)]
 #[br(little)]
 pub struct Coordinate {
-    x: f64,
-    y: f64,
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Debug, PartialEq, BinRead)]
@@ -56,27 +49,27 @@ macro_rules! derive_wkb_struct {
         #[derive(Debug, PartialEq, BinRead)]
         #[br(little)]
         pub struct $name {
-            byte_order: WkbByteOrder,
+            pub byte_order: WkbByteOrder,
             #[br(is_big = (byte_order == WkbByteOrder::Xdr))]
             #[br(assert(wkb_type == WkbGeometryType::$geometry_type))]
             pub wkb_type: WkbGeometryType,
             #[br(is_big = (byte_order == WkbByteOrder::Xdr))]
-            $count_field_name: u32,
+            pub $count_field_name: u32,
             #[br(is_big = (byte_order == WkbByteOrder::Xdr))]
             #[br(count = $count_field_name)]
-            $field_name: Vec<$child_geometry_type>,
+            pub $field_name: Vec<$child_geometry_type>,
         }
     };
     ($name:ident, $geometry_type:ident, $field_name:ident, $field_geometry_type:ty) => {
         #[derive(Debug, PartialEq, BinRead)]
         #[br(little)]
         pub struct $name {
-            byte_order: WkbByteOrder,
+            pub byte_order: WkbByteOrder,
             #[br(is_big = (byte_order == WkbByteOrder::Xdr))]
             #[br(assert(wkb_type == WkbGeometryType::$geometry_type))]
             pub wkb_type: WkbGeometryType,
             #[br(is_big = (byte_order == WkbByteOrder::Xdr))]
-            $field_name: $field_geometry_type,
+            pub $field_name: $field_geometry_type,
         }
     };
 }
@@ -289,7 +282,7 @@ impl TryFrom<Vec<Vec<Vec<[f64; 2]>>>> for WkbMultiPolygon {
 
 #[cfg(test)]
 mod test {
-    use binread::BinReaderExt;
+    use binread::{io::Cursor, BinReaderExt};
 
     use super::*;
 
