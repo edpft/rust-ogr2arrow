@@ -2,12 +2,12 @@ use crate::wkb::WkbGeometry;
 use arrow::{
     self,
     array::{
-        ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, StringArray,
+        ArrayData, ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
     },
     datatypes::{DataType, Field, Schema},
 };
-use binread::BinRead;
+use binread::{BinRead, BinReaderExt};
 use fallible_iterator::FallibleIterator;
 use modular_bitfield::prelude::*;
 use rusqlite::{self, named_params, Connection};
@@ -63,8 +63,54 @@ macro_rules! generate_match_arm {
     }};
 }
 
+fn get_number_of_features(connection: &Connection, layer: &str) -> i32 {
+    let sql = format!("SELECT MAX(FID) FROM {}", layer);
+    let mut statement = connection.prepare(&sql).unwrap();
+    statement.query_row([], |row| row.get(0)).unwrap()
+}
+
+fn get_points(connection: &Connection, layer: &str, number_of_features: i32) -> Vec<f64> {
+    let mut points: Vec<f64> = Vec::new();
+    for row_id in 1..=number_of_features {
+        let mut geometry_blob = connection
+            .blob_open(
+                rusqlite::DatabaseName::Main,
+                layer,
+                "geom",
+                row_id as i64,
+                true,
+            )
+            .unwrap();
+        let gpb: StandardGeoPackageBinary = geometry_blob.read_ne().unwrap();
+        if let WkbGeometry::Point(point) = gpb.geometry {
+            let array: [f64; 2] = point.try_into().unwrap();
+            array.into_iter().for_each(|point| {
+                points.push(point);
+            })
+        };
+    }
+    points
+}
+
+fn build_fixed_list_from_points(points: Vec<f64>) -> FixedSizeListArray {
+    let float_array = Float64Array::from_iter_values(points);
+
+    let child_data = ArrayData::from(float_array);
+
+    let array_data_type =
+        DataType::FixedSizeList(Box::new(Field::new("Point", DataType::Float64, true)), 2);
+
+    let list_data = ArrayData::builder(array_data_type)
+        .len(2)
+        .add_child_data(child_data)
+        .build()
+        .unwrap();
+
+    FixedSizeListArray::from(list_data)
+}
+
 #[allow(dead_code)]
-fn get_fields(
+pub fn get_fields(
     connection: &Connection,
     schema: &Schema,
     layer: &str,
@@ -97,6 +143,15 @@ fn get_fields(
                 DataType::Float32 => generate_match_arm!(rows, f32, Float32Array),
                 DataType::Float64 => generate_match_arm!(rows, f64, Float64Array),
                 DataType::Utf8 => generate_match_arm!(rows, String, StringArray),
+                DataType::FixedSizeList(_field, _offset) => {
+                    let number_of_features = get_number_of_features(connection, layer);
+
+                    let points = get_points(connection, layer, number_of_features);
+
+                    let fixed_list_array = build_fixed_list_from_points(points);
+
+                    Arc::new(fixed_list_array) as ArrayRef
+                }
                 // DataType::Binary => {
                 //     let values: rusqlite::Result<Vec<_>> = rows
                 //         .map(|row| {

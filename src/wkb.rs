@@ -1,8 +1,3 @@
-use arrow::array::ArrayData;
-use arrow::array::FixedSizeListArray;
-use arrow::buffer::Buffer;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
 use binread::BinRead;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -132,35 +127,44 @@ impl TryInto<[f64; 2]> for Coordinate {
     }
 }
 
-impl TryInto<FixedSizeListArray> for Coordinate {
+impl TryInto<[f64; 2]> for WkbPoint {
     type Error = ();
 
-    fn try_into(self) -> Result<FixedSizeListArray, Self::Error> {
-        let data_type =
-            DataType::FixedSizeList(Box::new(Field::new("Point", DataType::Float64, true)), 2);
-        let array_data = ArrayData::builder(data_type)
-            .len(2)
-            .add_buffer(Buffer::from_slice_ref(&[self.x, self.y]))
-            .build()
-            .unwrap();
-        Ok(FixedSizeListArray::from(array_data))
+    fn try_into(self) -> Result<[f64; 2], Self::Error> {
+        let coordinate: [f64; 2] = self.point.try_into()?;
+        Ok(coordinate)
     }
 }
 
-impl TryInto<FixedSizeListArray> for WkbPoint {
-    type Error = ();
+// impl TryInto<FixedSizeListArray> for Coordinate {
+//     type Error = ();
 
-    fn try_into(self) -> Result<FixedSizeListArray, Self::Error> {
-        let data_type =
-            DataType::FixedSizeList(Box::new(Field::new("Point", DataType::Float64, true)), 2);
-        let array_data = ArrayData::builder(data_type)
-            .len(2)
-            .add_buffer(Buffer::from_slice_ref(&[self.point.x, self.point.y]))
-            .build()
-            .unwrap();
-        Ok(FixedSizeListArray::from(array_data))
-    }
-}
+//     fn try_into(self) -> Result<FixedSizeListArray, Self::Error> {
+//         let data_type =
+//             DataType::FixedSizeList(Box::new(Field::new("Point", DataType::Float64, true)), 2);
+//         let array_data = ArrayData::builder(data_type)
+//             .len(2)
+//             .add_buffer(Buffer::from_slice_ref(&[self.x, self.y]))
+//             .build()
+//             .unwrap();
+//         Ok(FixedSizeListArray::from(array_data))
+//     }
+// }
+
+// impl TryInto<FixedSizeListArray> for WkbPoint {
+//     type Error = ();
+
+//     fn try_into(self) -> Result<FixedSizeListArray, Self::Error> {
+//         let data_type =
+//             DataType::FixedSizeList(Box::new(Field::new("Point", DataType::Float64, true)), 2);
+//         let array_data = ArrayData::builder(data_type)
+//             .len(2)
+//             .add_buffer(Buffer::from_slice_ref(&[self.point.x, self.point.y]))
+//             .build()
+//             .unwrap();
+//         Ok(FixedSizeListArray::from(array_data))
+//     }
+// }
 
 // impl TryInto<GenericListArray<FixedSizeListArray>> for LinearRing {
 //     type Error = ();
