@@ -184,8 +184,13 @@ pub struct GeoPackageBinaryHeader {
     flags: Flags,
     // TODO use `flags.byte_order` to set endiness of `srs_id`
     srs_id: u32,
-    // TODO use `flags.envelope_size` to set size of `envelope`
-    envelope: [f64; 4],
+    #[br(count = match flags.envelope_size() {
+        1 => 4,
+        2 | 3 => 6,
+        4 => 8,
+        _ => 0,
+    })]
+    envelope: Vec<f64>,
 }
 
 #[derive(BinRead, Debug)]
