@@ -2,16 +2,16 @@ use crate::wkb::WkbGeometry;
 use arrow::{
     self,
     array::{
-        ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, StringArray,
+        ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, StringArray,
     },
-    datatypes::{DataType, Field, Int32Type, Schema},
+    datatypes::{DataType, Field, Schema},
 };
-use binread::{BinRead, BinReaderExt};
+use binread::BinRead;
 use fallible_iterator::FallibleIterator;
 use modular_bitfield::prelude::*;
 use rusqlite::{self, named_params, Connection};
-use std::{fmt::Error, iter::Iterator, sync::Arc};
+use std::{iter::Iterator, sync::Arc};
 
 fn get_data_type(sql_name: Option<&str>) -> DataType {
     sql_name
@@ -63,6 +63,7 @@ macro_rules! generate_match_arm {
     }};
 }
 
+#[allow(dead_code)]
 fn get_fields(
     connection: &Connection,
     schema: &Schema,
@@ -137,6 +138,7 @@ fn get_fields(
 //     }
 // }
 
+#[allow(dead_code)]
 fn list_layers(connection: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut statement = connection.prepare("SELECT table_name FROM gpkg_contents")?;
 
@@ -152,6 +154,7 @@ fn list_layers(connection: &Connection) -> rusqlite::Result<Vec<String>> {
     values
 }
 
+#[allow(dead_code)]
 fn get_bounds(connection: &Connection, layer: &str) -> rusqlite::Result<[f64; 4]> {
     let mut statement = connection
         .prepare("SELECT min_x, min_y, max_x, max_y FROM gpkg_contents WHERE table_name = :layer")
@@ -166,17 +169,21 @@ fn get_bounds(connection: &Connection, layer: &str) -> rusqlite::Result<[f64; 4]
 }
 
 #[bitfield]
-#[derive(BinRead, Debug)]
+#[derive(BinRead, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[br(map = Self::from_bytes)]
 pub struct Flags {
+    #[allow(dead_code)]
     byte_order: B1,
     envelope_size: B3,
+    #[allow(dead_code)]
     empty_geometry_flag: B1,
+    #[allow(dead_code)]
     gpb_type: B1,
+    #[allow(dead_code)]
     reserved: B2,
 }
 
-#[derive(BinRead, Debug)]
+#[derive(BinRead, Debug, PartialEq, PartialOrd)]
 #[br(magic = b"GP")] // byte[2] magic = 0x4750;
 #[br(little)]
 pub struct GeoPackageBinaryHeader {
@@ -193,8 +200,71 @@ pub struct GeoPackageBinaryHeader {
     envelope: Vec<f64>,
 }
 
-#[derive(BinRead, Debug)]
+#[derive(BinRead, Debug, PartialEq)]
 pub struct StandardGeoPackageBinary {
     pub header: GeoPackageBinaryHeader,
     pub geometry: WkbGeometry,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::wkb::{Coordinate, WkbByteOrder::Ndr, WkbGeometryType::Point, WkbPoint};
+    use binread::{io::Cursor, BinReaderExt};
+
+    #[test]
+    fn test_list_layers() {
+        let expected_layers = vec!["point".to_string()];
+
+        let connection = Connection::open("Data/point.gpkg").unwrap();
+        let recieved_layers = list_layers(&connection).unwrap();
+
+        assert_eq!(expected_layers, recieved_layers)
+    }
+
+    #[test]
+    fn test_get_bounds() {
+        let expected_bounds = [0.0f64, 0.0f64, 1.0f64, 1.0f64];
+
+        let connection = Connection::open("Data/point.gpkg").unwrap();
+        let recieved_bounds = get_bounds(&connection, "point").unwrap();
+
+        assert_eq!(expected_bounds, recieved_bounds)
+    }
+
+    #[test]
+    fn test_standard_geopackage_binary() {
+        let expected_gpb_header_flags = Flags::new()
+            .with_byte_order(1)
+            .with_envelope_size(0)
+            .with_empty_geometry_flag(0)
+            .with_gpb_type(0)
+            .with_reserved(0);
+
+        let expected_gpb_header = GeoPackageBinaryHeader {
+            version: 0,
+            flags: expected_gpb_header_flags,
+            srs_id: 27700,
+            envelope: [].to_vec(),
+        };
+
+        let expected_gpb_geometry = WkbPoint {
+            byte_order: Ndr,
+            wkb_type: Point,
+            point: Coordinate { x: 0.0, y: 0.0 },
+        };
+
+        let expected_gpb = StandardGeoPackageBinary {
+            header: expected_gpb_header,
+            geometry: WkbGeometry::Point(expected_gpb_geometry),
+        };
+
+        let mut reader = Cursor::new(
+            b"GP\x00\x014l\x00\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        );
+
+        let recieved_gpb: StandardGeoPackageBinary = reader.read_ne().unwrap();
+
+        assert_eq!(expected_gpb, recieved_gpb)
+    }
 }
