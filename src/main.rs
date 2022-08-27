@@ -1,20 +1,11 @@
-use std::sync::Arc;
+use ogr2arrow::dataset::Dataset;
 
-use arrow::record_batch::RecordBatch;
-use ogr2arrow::gpkg::{get_fields, get_schema};
-use rusqlite::Connection;
+fn main() -> anyhow::Result<()> {
+    let dataset = Dataset::open("Data/point.gpkg")?;
 
-fn main() -> rusqlite::Result<()> {
-    let connection = Connection::open("Data/point.gpkg")?;
-    let layer = "point";
+    let layers = dataset.list_layers();
 
-    let schema = get_schema(&connection, layer)?;
-
-    let fields = get_fields(&connection, &schema, layer);
-
-    let batch = RecordBatch::try_new(Arc::new(schema), fields).unwrap();
-
-    dbg!(batch);
+    dbg!(layers);
 
     Ok(())
 }

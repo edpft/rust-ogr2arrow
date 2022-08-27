@@ -194,7 +194,7 @@ pub fn get_fields(
 // }
 
 #[allow(dead_code)]
-fn list_layers(connection: &Connection) -> rusqlite::Result<Vec<String>> {
+pub fn list_layers(connection: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut statement = connection.prepare("SELECT table_name FROM gpkg_contents")?;
 
     let rows = statement.query([])?;
