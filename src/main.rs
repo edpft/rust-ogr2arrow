@@ -1,11 +1,11 @@
 use ogr2arrow::dataset::Dataset;
 
 fn main() -> anyhow::Result<()> {
-    let dataset = Dataset::open("Data/point.gpkg".to_string())?;
+    let dataset = Dataset::open("Data/point.gpkg")?;
 
-    let layers = dataset.list_layers()?;
+    let layer = dataset.get_layer("point")?;
 
-    dbg!(layers);
+    dbg!(layer);
 
     Ok(())
 }

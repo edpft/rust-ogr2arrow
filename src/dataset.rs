@@ -1,6 +1,7 @@
 use std::{fmt::Display, path::Path};
 
 use anyhow::Context;
+use arrow::record_batch::RecordBatch;
 
 use crate::gpkg;
 
@@ -31,5 +32,12 @@ impl Dataset {
             }
         };
         Ok(layers)
+    }
+    pub fn get_layer(self, layer_name: &str) -> anyhow::Result<RecordBatch> {
+        let layer = match self {
+            Dataset::Gpkg(connection) => gpkg::get_layer(&connection, layer_name)
+                .context(format!("Failed to get {}", layer_name))?,
+        };
+        Ok(layer)
     }
 }

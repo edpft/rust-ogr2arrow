@@ -6,6 +6,7 @@ use arrow::{
         Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
     },
     datatypes::{DataType, Field, Schema},
+    record_batch::RecordBatch,
 };
 use binread::{BinRead, BinReaderExt};
 use fallible_iterator::FallibleIterator;
@@ -167,6 +168,13 @@ pub fn get_fields(
             }
         })
         .collect()
+}
+
+pub fn get_layer(connection: &Connection, layer_name: &str) -> anyhow::Result<RecordBatch> {
+    let schema = get_schema(connection, layer_name)?;
+    let fields = get_fields(connection, &schema, layer_name);
+    let record_batch = RecordBatch::try_new(Arc::new(schema), fields)?;
+    Ok(record_batch)
 }
 
 // fn get_geometry(
